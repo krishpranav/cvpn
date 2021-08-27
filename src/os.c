@@ -1,6 +1,54 @@
 #include "os.h"
 #include "vpn.h"
 
+ssize_t safe_read(const int fd, void *const buf_, size_t count, const int timeout)
+{
+    struct pollfd  pfd;
+    unsigned char *buf    = (unsigned char *) buf_;
+    ssize_t        readnb = (ssize_t) -1;
+
+    while (readnb != 0 && count > (ssize_t) 0) {
+        while ((readnb = read(fd, buf, count)) < (ssize_t) 0) {
+            if (errno == EAGAIN) {
+                pfd.fd     = fd;
+                pfd.events = POLLIN;
+                if (poll(&pfd, (nfds_t) 1, timeout) <= 0) {
+                    return (ssize_t) -1;
+                }
+            } else if (errno != EINTR || exit_signal_received) {
+                return (ssize_t) -1;
+            }
+        }
+        count -= readnb;
+        buf += readnb;
+    }
+    return (ssize_t)(buf - (unsigned char *) buf_);
+}
+
+ssize_t safe_write(const int fd, const void *const buf_, size_t count, const int timeout)
+{
+    struct pollfd pfd;
+    const char *  buf = (const char *) buf_;
+    ssize_t       written;
+
+    while (count > (size_t) 0) {
+        while ((written = write(fd, buf, count)) < (ssize_t) 0) {
+            if (errno == EAGAIN) {
+                pfd.fd     = fd;
+                pfd.events = POLLOUT;
+                if (poll(&pfd, (nfds_t) 1, timeout) <= 0) {
+                    return (ssize_t) -1;
+                }
+            } else if (errno != EINTR || exit_signal_received) {
+                return (ssize_t) -1;
+            }
+        }
+        buf += written;
+        count -= written;
+    }
+    return (ssize_t)(buf - (const char *) buf_);
+}
+
 ssize_t safe_read_partial(const int fd, void *const buf_, const size_t max_count)
 {
     unsigned char *const buf = (unsigned char *) buf_;
@@ -84,6 +132,66 @@ static int tun_create_by_id(char if_name[IFNAMSIZ], unsigned int id)
 
     return fd;
 }
+
+int tun_create(char if_name[IFNAMSIZ], const char *wanted_name)
+{
+    unsigned int id;
+    int          fd;
+
+    if (wanted_name == NULL || *wanted_name == 0) {
+        for (id = 0; id < 32; id++) {
+            if ((fd = tun_create_by_id(if_name, id)) != -1) {
+                return fd;
+            }
+        }
+        return -1;
+    }
+    if (sscanf(wanted_name, "utun%u", &id) != 1) {
+        errno = EINVAL;
+        return -1;
+    }
+    return tun_create_by_id(if_name, id);
+}
+#elif defined(__OpenBSD__) || defined(__FreeBSD__) || defined(__DragonFly__) || defined(__NetBSD__)
+int tun_create(char if_name[IFNAMSIZ], const char *wanted_name)
+{
+    char         path[64];
+    unsigned int id;
+    int          fd;
+
+    if (wanted_name == NULL || *wanted_name == 0) {
+        for (id = 0; id < 32; id++) {
+            snprintf(if_name, IFNAMSIZ, "tun%u", id);
+            snprintf(path, sizeof path, "/dev/%s", if_name);
+            if ((fd = open(path, O_RDWR)) != -1) {
+                return fd;
+            }
+        }
+        return -1;
+    }
+    snprintf(if_name, IFNAMSIZ, "%s", wanted_name);
+    snprintf(path, sizeof path, "/dev/%s", wanted_name);
+
+    return open(path, O_RDWR);
+}
+#else
+int tun_create(char if_name[IFNAMSIZ], const char *wanted_name)
+{
+    char path[64];
+
+    if (wanted_name == NULL) {
+        fprintf(stderr,
+                "The tunnel device name must be specified on that platform "
+                "(try 'tun0')\n");
+        errno = EINVAL;
+        return -1;
+    }
+    snprintf(if_name, IFNAMSIZ, "%s", wanted_name);
+    snprintf(path, sizeof path, "/dev/%s", wanted_name);
+
+    return open(path, O_RDWR);
+}
+#endif
 
 int tun_set_mtu(const char *if_name, int mtu)
 {
@@ -329,4 +437,101 @@ int shell_cmd(const char *substs[][2], const char *args_str, int silent)
         return -1;
     }
     return 0;
+}
+
+Cmds firewall_rules_cmds(int is_server)
+{
+    if (is_server) {
+#ifdef __linux__
+        static const char
+            *set_cmds[] =
+                { "sysctl net.ipv4.ip_forward=1",
+                  "ip addr add $LOCAL_TUN_IP peer $REMOTE_TUN_IP dev $IF_NAME",
+                  "ip -6 addr add $LOCAL_TUN_IP6 peer $REMOTE_TUN_IP6/96 dev $IF_NAME",
+                  "ip link set dev $IF_NAME up",
+                  "iptables -t raw -I PREROUTING ! -i $IF_NAME -d $LOCAL_TUN_IP -m addrtype ! "
+                  "--src-type LOCAL -j DROP",
+                  "iptables -t nat -A POSTROUTING -o $EXT_IF_NAME -s $REMOTE_TUN_IP -j MASQUERADE",
+                  "iptables -t filter -A FORWARD -i $EXT_IF_NAME -o $IF_NAME -m state --state "
+                  "RELATED,ESTABLISHED -j ACCEPT",
+                  "iptables -t filter -A FORWARD -i $IF_NAME -o $EXT_IF_NAME -j ACCEPT",
+                  NULL },
+            *unset_cmds[] = {
+                "iptables -t nat -D POSTROUTING -o $EXT_IF_NAME -s $REMOTE_TUN_IP -j MASQUERADE",
+                "iptables -t filter -D FORWARD -i $EXT_IF_NAME -o $IF_NAME -m state --state "
+                "RELATED,ESTABLISHED -j ACCEPT",
+                "iptables -t filter -D FORWARD -i $IF_NAME -o $EXT_IF_NAME -j ACCEPT",
+                "iptables -t raw -D PREROUTING ! -i $IF_NAME -d $LOCAL_TUN_IP -m addrtype ! "
+                "--src-type LOCAL -j DROP",
+                NULL
+            };
+#elif defined(__APPLE__) || defined(__OpenBSD__) || defined(__FreeBSD__) || \
+    defined(__DragonFly__) || defined(__NetBSD__)
+        static const char *set_cmds[] =
+            { "sysctl -w net.inet.ip.forwarding=1",
+              "ifconfig $IF_NAME $LOCAL_TUN_IP $REMOTE_TUN_IP up",
+              "ifconfig $IF_NAME inet6 $LOCAL_TUN_IP6 $REMOTE_TUN_IP6 prefixlen 128 up", NULL },
+                          *unset_cmds[] = { NULL, NULL };
+#else
+        static const char *const *set_cmds = NULL, *const *unset_cmds = NULL;
+#endif
+        return (Cmds){ set_cmds, unset_cmds };
+    } else {
+#if defined(__APPLE__) || defined(__OpenBSD__) || defined(__FreeBSD__) || \
+    defined(__DragonFly__) || defined(__NetBSD__)
+        static const char *set_cmds[] =
+            { "ifconfig $IF_NAME $LOCAL_TUN_IP $REMOTE_TUN_IP up",
+              "ifconfig $IF_NAME inet6 $LOCAL_TUN_IP6 $REMOTE_TUN_IP6 prefixlen 128 up",
+#ifndef NO_DEFAULT_ROUTES
+              "route add $EXT_IP $EXT_GW_IP",
+              "route add 0/1 $REMOTE_TUN_IP",
+              "route add 128/1 $REMOTE_TUN_IP",
+              "route add -inet6 -blackhole 0000::/1 $REMOTE_TUN_IP6",
+              "route add -inet6 -blackhole 8000::/1 $REMOTE_TUN_IP6",
+#endif
+              NULL },
+                          *unset_cmds[] = {
+#ifndef NO_DEFAULT_ROUTES
+                              "route delete $EXT_IP",
+                              "route delete 0/1",
+                              "route delete 128/1",
+                              "route delete -inet6 0000::/1",
+                              "route delete -inet6 8000::/1",
+#endif
+                              NULL
+                          };
+#elif defined(__linux__)
+        static const char
+            *set_cmds[] =
+                { "sysctl net.ipv4.tcp_congestion_control=bbr",
+                  "ip link set dev $IF_NAME up",
+                  "iptables -t raw -I PREROUTING ! -i $IF_NAME -d $LOCAL_TUN_IP -m addrtype ! "
+                  "--src-type LOCAL -j DROP",
+                  "ip addr add $LOCAL_TUN_IP peer $REMOTE_TUN_IP dev $IF_NAME",
+                  "ip -6 addr add $LOCAL_TUN_IP6 peer $REMOTE_TUN_IP6/96 dev $IF_NAME",
+#ifndef NO_DEFAULT_ROUTES
+                  "ip route add default dev $IF_NAME table 42069",
+                  "ip -6 route add default dev $IF_NAME table 42069",
+                  "ip rule add not fwmark 42069 table 42069",
+                  "ip -6 rule add not fwmark 42069 table 42069",
+                  "ip rule add table main suppress_prefixlength 0",
+                  "ip -6 rule add table main suppress_prefixlength 0",
+#endif
+                  NULL },
+            *unset_cmds[] = {
+#ifndef NO_DEFAULT_ROUTES
+                "ip rule delete table 42069",
+                "ip -6 rule delete table 42069",
+                "ip rule delete table main suppress_prefixlength 0",
+                "ip -6 rule delete table main suppress_prefixlength 0",
+#endif
+                "iptables -t raw -D PREROUTING ! -i $IF_NAME -d $LOCAL_TUN_IP -m addrtype ! "
+                "--src-type LOCAL -j DROP",
+                NULL
+            };
+#else
+        static const char *const *set_cmds = NULL, *const *unset_cmds = NULL;
+#endif
+        return (Cmds){ set_cmds, unset_cmds };
+    }
 }
