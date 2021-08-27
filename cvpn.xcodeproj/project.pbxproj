@@ -11,6 +11,7 @@
 		9F9C5A3A26D91189002EABE9 /* vpn.c in Sources */ = {isa = PBXBuildFile; fileRef = 9F9C5A3626D91188002EABE9 /* vpn.c */; };
 		9F9C5A3B26D91189002EABE9 /* os.c in Sources */ = {isa = PBXBuildFile; fileRef = 9F9C5A3726D91188002EABE9 /* os.c */; };
 		9F9C5A3C26D91189002EABE9 /* Makefile in Sources */ = {isa = PBXBuildFile; fileRef = 9F9C5A3826D91189002EABE9 /* Makefile */; };
+		9F9C5A4426D91A07002EABE9 /* .test.c in Sources */ = {isa = PBXBuildFile; fileRef = 9F9C5A4226D91A07002EABE9 /* .test.c */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -37,6 +38,8 @@
 		9F9C5A3826D91189002EABE9 /* Makefile */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.make; path = Makefile; sourceTree = "<group>"; };
 		9F9C5A3E26D9119F002EABE9 /* .gitignore */ = {isa = PBXFileReference; lastKnownFileType = text; path = .gitignore; sourceTree = "<group>"; };
 		9F9C5A4026D912AD002EABE9 /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
+		9F9C5A4226D91A07002EABE9 /* .test.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = .test.c; sourceTree = "<group>"; };
+		9F9C5A4326D91A07002EABE9 /* .cflags */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text; path = .cflags; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -53,6 +56,8 @@
 		9F9C5A1A26D91162002EABE9 = {
 			isa = PBXGroup;
 			children = (
+				9F9C5A4326D91A07002EABE9 /* .cflags */,
+				9F9C5A4226D91A07002EABE9 /* .test.c */,
 				9F9C5A4026D912AD002EABE9 /* README.md */,
 				9F9C5A3E26D9119F002EABE9 /* .gitignore */,
 				9F9C5A3326D91188002EABE9 /* .clang-format */,
@@ -150,6 +155,7 @@
 				9F9C5A3B26D91189002EABE9 /* os.c in Sources */,
 				9F9C5A3A26D91189002EABE9 /* vpn.c in Sources */,
 				9F9C5A3C26D91189002EABE9 /* Makefile in Sources */,
+				9F9C5A4426D91A07002EABE9 /* .test.c in Sources */,
 				9F9C5A3926D91189002EABE9 /* charm.c in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
