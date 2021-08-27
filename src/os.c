@@ -84,3 +84,249 @@ static int tun_create_by_id(char if_name[IFNAMSIZ], unsigned int id)
 
     return fd;
 }
+
+int tun_set_mtu(const char *if_name, int mtu)
+{
+    struct ifreq ifr;
+    int          fd;
+
+    if ((fd = socket(AF_INET, SOCK_DGRAM, 0)) == -1) {
+        return -1;
+    }
+    ifr.ifr_mtu = mtu;
+    snprintf(ifr.ifr_name, IFNAMSIZ, "%s", if_name);
+    if (ioctl(fd, SIOCSIFMTU, &ifr) != 0) {
+        close(fd);
+        return -1;
+    }
+    return close(fd);
+}
+
+#if !defined(__APPLE__) && !defined(__OpenBSD__)
+ssize_t tun_read(int fd, void *data, size_t size)
+{
+    return safe_read_partial(fd, data, size);
+}
+
+ssize_t tun_write(int fd, const void *data, size_t size)
+{
+    return safe_write(fd, data, size, TIMEOUT);
+}
+#else
+ssize_t tun_read(int fd, void *data, size_t size)
+{
+    ssize_t  ret;
+    uint32_t family;
+
+    struct iovec iov[2] = {
+        {
+            .iov_base = &family,
+            .iov_len  = sizeof family,
+        },
+        {
+            .iov_base = data,
+            .iov_len  = size,
+        },
+    };
+
+    ret = readv(fd, iov, 2);
+    if (ret <= (ssize_t) 0) {
+        return -1;
+    }
+    if (ret <= (ssize_t) sizeof family) {
+        return 0;
+    }
+    return ret - sizeof family;
+}
+
+ssize_t tun_write(int fd, const void *data, size_t size)
+{
+    uint32_t family;
+    ssize_t  ret;
+
+    if (size < 20) {
+        return 0;
+    }
+    switch (*(const uint8_t *) data >> 4) {
+    case 4:
+        family = htonl(AF_INET);
+        break;
+    case 6:
+        family = htonl(AF_INET6);
+        break;
+    default:
+        errno = EINVAL;
+        return -1;
+    }
+    struct iovec iov[2] = {
+        {
+            .iov_base = &family,
+            .iov_len  = sizeof family,
+        },
+        {
+            .iov_base = (void *) data,
+            .iov_len  = size,
+        },
+    };
+    ret = writev(fd, iov, 2);
+    if (ret <= (ssize_t) 0) {
+        return ret;
+    }
+    if (ret <= (ssize_t) sizeof family) {
+        return 0;
+    }
+    return ret - sizeof family;
+}
+#endif
+
+static char *read_from_shell_command(char *result, size_t sizeof_result, const char *command)
+{
+    FILE *fp;
+    char *pnt;
+
+    if ((fp = popen(command, "r")) == NULL) {
+        return NULL;
+    }
+    if (fgets(result, (int) sizeof_result, fp) == NULL) {
+        pclose(fp);
+        fprintf(stderr, "Command [%s] failed]\n", command);
+        return NULL;
+    }
+    if ((pnt = strrchr(result, '\n')) != NULL) {
+        *pnt = 0;
+    }
+    (void) pclose(fp);
+
+    return *result == 0 ? NULL : result;
+}
+
+const char *get_default_gw_ip(void)
+{
+    static char gw[64];
+#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || \
+    defined(__DragonFly__) || defined(__NetBSD__)
+    return read_from_shell_command(
+        gw, sizeof gw, "route -n get default 2>/dev/null|awk '/gateway:/{print $2;exit}'");
+#elif defined(__linux__)
+    return read_from_shell_command(gw, sizeof gw,
+                                   "ip route show default 2>/dev/null|awk '/default/{print $3}'");
+#else
+    return NULL;
+#endif
+}
+
+const char *get_default_ext_if_name(void)
+{
+    static char if_name[64];
+#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || \
+    defined(__DragonFly__) || defined(__NetBSD__)
+    return read_from_shell_command(if_name, sizeof if_name,
+                                   "route -n get default 2>/dev/null|awk "
+                                   "'/interface:/{print $2;exit}'");
+#elif defined(__linux__)
+    return read_from_shell_command(if_name, sizeof if_name,
+                                   "ip route show default 2>/dev/null|awk '/default/{print $5}'");
+#else
+    return NULL;
+#endif
+}
+
+int tcp_opts(int fd)
+{
+    int on = 1;
+
+    (void) setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, (char *) &on, sizeof on);
+#ifdef TCP_QUICKACK
+    (void) setsockopt(fd, IPPROTO_TCP, TCP_QUICKACK, (char *) &on, sizeof on);
+#else
+    (void) setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, (char *) &on, sizeof on);
+#endif
+#ifdef TCP_CONGESTION
+    (void) setsockopt(fd, IPPROTO_TCP, TCP_CONGESTION, OUTER_CONGESTION_CONTROL_ALG,
+                      sizeof OUTER_CONGESTION_CONTROL_ALG - 1);
+#endif
+#if BUFFERBLOAT_CONTROL && defined(TCP_NOTSENT_LOWAT)
+    (void) setsockopt(fd, IPPROTO_TCP, TCP_NOTSENT_LOWAT,
+                      (char *) (unsigned int[]){ NOTSENT_LOWAT }, sizeof(unsigned int));
+#endif
+#ifdef TCP_USER_TIMEOUT
+    (void) setsockopt(fd, IPPROTO_TCP, TCP_USER_TIMEOUT, (char *) (unsigned int[]){ TIMEOUT },
+                      sizeof(unsigned int));
+#endif
+#ifdef SO_MARK
+    (void) setsockopt(fd, SOL_SOCKET, SO_MARK, (char *) (unsigned int[]){ 42069U },
+                      sizeof(unsigned int));
+#endif
+    return 0;
+}
+
+int shell_cmd(const char *substs[][2], const char *args_str, int silent)
+{
+    char * args[64];
+    char   cmdbuf[4096];
+    pid_t  child;
+    size_t args_i = 0, cmdbuf_i = 0, args_str_i, i;
+    int    c, exit_status, is_space = 1;
+
+    errno = ENOSPC;
+    for (args_str_i = 0; (c = args_str[args_str_i]) != 0; args_str_i++) {
+        if (isspace((unsigned char) c)) {
+            if (!is_space) {
+                if (cmdbuf_i >= sizeof cmdbuf) {
+                    return -1;
+                }
+                cmdbuf[cmdbuf_i++] = 0;
+            }
+            is_space = 1;
+            continue;
+        }
+        if (is_space) {
+            if (args_i >= sizeof args / sizeof args[0]) {
+                return -1;
+            }
+            args[args_i++] = &cmdbuf[cmdbuf_i];
+        }
+        is_space = 0;
+        for (i = 0; substs[i][0] != NULL; i++) {
+            size_t pat_len = strlen(substs[i][0]), sub_len;
+            if (!strncmp(substs[i][0], &args_str[args_str_i], pat_len)) {
+                sub_len = strlen(substs[i][1]);
+                if (sizeof cmdbuf - cmdbuf_i <= sub_len) {
+                    return -1;
+                }
+                memcpy(&cmdbuf[cmdbuf_i], substs[i][1], sub_len);
+                args_str_i += pat_len - 1;
+                cmdbuf_i += sub_len;
+                break;
+            }
+        }
+        if (substs[i][0] == NULL) {
+            if (cmdbuf_i >= sizeof cmdbuf) {
+                return -1;
+            }
+            cmdbuf[cmdbuf_i++] = c;
+        }
+    }
+    if (!is_space) {
+        if (cmdbuf_i >= sizeof cmdbuf) {
+            return -1;
+        }
+        cmdbuf[cmdbuf_i++] = 0;
+    }
+    if (args_i >= sizeof args / sizeof args[0] || args_i == 0) {
+        return -1;
+    }
+    args[args_i] = NULL;
+    if ((child = fork()) == (pid_t) -1) {
+        return -1;
+    } else if (child == (pid_t) 0) {
+        if (silent) {
+            dup2(dup2(open("/dev/null", O_WRONLY), 2), 1);
+        }
+        execvp(args[0], args);
+        _exit(1);
+    } else if (waitpid(child, &exit_status, 0) == (pid_t) -1 || !WIFEXITED(exit_status)) {
+        return -1;
+    }
+    return 0;
+}
