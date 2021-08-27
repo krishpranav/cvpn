@@ -36,6 +36,7 @@
 		9F9C5A3726D91188002EABE9 /* os.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = os.c; sourceTree = "<group>"; };
 		9F9C5A3826D91189002EABE9 /* Makefile */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.make; path = Makefile; sourceTree = "<group>"; };
 		9F9C5A3E26D9119F002EABE9 /* .gitignore */ = {isa = PBXFileReference; lastKnownFileType = text; path = .gitignore; sourceTree = "<group>"; };
+		9F9C5A4026D912AD002EABE9 /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -52,6 +53,7 @@
 		9F9C5A1A26D91162002EABE9 = {
 			isa = PBXGroup;
 			children = (
+				9F9C5A4026D912AD002EABE9 /* README.md */,
 				9F9C5A3E26D9119F002EABE9 /* .gitignore */,
 				9F9C5A3326D91188002EABE9 /* .clang-format */,
 				9F9C5A2F26D91188002EABE9 /* include */,
