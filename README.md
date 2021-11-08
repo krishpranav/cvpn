@@ -27,7 +27,7 @@ sudo ./cvpn server vpnserver.key auto 1956
 
 - Example of using on the client
 ```
-sudo ./dsvpn client vpn.key 34.216.127.34 1959
+sudo ./cvpn client vpn.key 34.216.127.34 1959
 ```
 
 - for disconnection cvpn ```ctrl-c```
